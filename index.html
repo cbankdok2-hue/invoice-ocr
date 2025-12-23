@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Invoice OCR – Auto + Manual (Professional)</title>
+<title>Invoice OCR – Auto + Manual (Final)</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
@@ -10,7 +10,6 @@
 
 <style>
 body { font-family: Arial; margin: 10px; }
-.top { margin-bottom: 10px; }
 .container { display: flex; gap: 10px; }
 
 #pdfWrap { position: relative; border: 1px solid #aaa; }
@@ -22,10 +21,23 @@ canvas { display: block; }
   pointer-events: none;
 }
 
-.right { width: 320px; }
+.right { width: 340px; }
 input, button { width: 100%; margin-bottom: 6px; padding: 6px; }
 
 #progress { font-size: 13px; margin: 6px 0; }
+#status {
+  margin: 6px 0;
+  font-size: 14px;
+  font-weight: bold;
+  color: green;
+}
+#summary {
+  margin: 6px 0;
+  background: #eef6ee;
+  padding: 6px;
+  font-size: 13px;
+  display: none;
+}
 #log {
   background: #f4f4f4;
   height: 150px;
@@ -38,11 +50,9 @@ input, button { width: 100%; margin-bottom: 6px; padding: 6px; }
 
 <body>
 
-<h3>Invoice OCR – Auto + Manual (Accurate)</h3>
+<h3>Invoice OCR – Auto + Manual (Final)</h3>
 
-<div class="top">
-  <input type="file" id="files" multiple accept="application/pdf">
-</div>
+<input type="file" id="files" multiple accept="application/pdf">
 
 <div class="container">
   <div id="pdfWrap">
@@ -52,6 +62,9 @@ input, button { width: 100%; margin-bottom: 6px; padding: 6px; }
 
   <div class="right">
     <div id="progress"></div>
+    <div id="status"></div>
+
+    <div id="summary"></div>
 
     <label>Internal Ref No</label>
     <input id="ref" readonly>
@@ -62,6 +75,7 @@ input, button { width: 100%; margin-bottom: 6px; padding: 6px; }
     <button onclick="manualOCR()">Manual OCR (Drag)</button>
     <button onclick="next()">Next PDF</button>
     <button onclick="download()">Download Excel</button>
+    <button onclick="clearAll()">Clear All</button>
 
     <button onclick="zoomIn()">Zoom +</button>
     <button onclick="zoomOut()">Zoom -</button>
@@ -83,15 +97,23 @@ let files=[], i=0, pdf, page, scale=2;
 let sx,sy,ex,ey,drag=false;
 let excel=[["Internal Ref No","Invoice Date"]];
 
+let autoCount=0, manualCount=0, failCount=0;
+
 document.getElementById("files").onchange=e=>{
  files=[...e.target.files];
- i=0; load();
+ i=0;
+ excel=[["Internal Ref No","Invoice Date"]];
+ autoCount=manualCount=failCount=0;
+ document.getElementById("summary").style.display="none";
+ document.getElementById("status").textContent="";
+ load();
 };
 
 async function load(){
- if(!files[i]) return;
- document.getElementById("ref").value=files[i].name.replace(/\.pdf$/i,"");
- document.getElementById("date").value="";
+ if(i>=files.length){ finish(); return; }
+
+ ref.value=files[i].name.replace(/\.pdf$/i,"");
+ date.value="";
  updateProgress();
 
  pdf=await pdfjsLib.getDocument({data:await files[i].arrayBuffer()}).promise;
@@ -101,24 +123,21 @@ async function load(){
  c.width=vp.width; c.height=vp.height;
  await page.render({canvasContext:ctx,viewport:vp}).promise;
 
- autoOCR(); // 🔥 AUTO OCR FIRST
+ autoOCR();
 }
 
 async function autoOCR(){
- log("Auto OCR...");
- const crop=document.createElement("canvas");
- crop.width=c.width; crop.height=c.height;
- crop.getContext("2d").drawImage(c,0,0);
-
- const r=await Tesseract.recognize(crop,"eng");
+ log("Auto OCR running...");
+ const r=await Tesseract.recognize(c,"eng");
  const m=r.data.text.match(/Invoice\s*Date[^0-9]*(\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{1,4})/i);
 
  if(m){
-   document.getElementById("date").value=normalize(m[1]);
+   date.value=normalize(m[1]);
+   autoCount++;
    log("Auto OCR success");
-   setTimeout(next,600); // auto move
+   setTimeout(next,500);
  }else{
-   log("Auto OCR failed → use manual drag");
+   log("Auto OCR failed → manual drag required");
  }
 }
 
@@ -138,24 +157,29 @@ c.onmousemove=e=>{
 c.onmouseup=()=>drag=false;
 
 async function manualOCR(){
- if(!sx||!ex) return alert("Drag area first");
+ if(!sx||!ex) return alert("Please drag area first");
+
  const w=Math.abs(ex-sx), h=Math.abs(ey-sy);
  const crop=document.createElement("canvas");
  crop.width=w; crop.height=h;
  crop.getContext("2d").drawImage(
-   c,Math.min(sx,ex),Math.min(sy,ey),w,h,0,0,w,h
+  c,Math.min(sx,ex),Math.min(sy,ey),w,h,0,0,w,h
  );
+
  const r=await Tesseract.recognize(
   crop,"eng",{tessedit_char_whitelist:"0123456789./-"}
  );
+
  const m=r.data.text.match(/\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{1,4}/);
  if(m){
-   document.getElementById("date").value=normalize(m[0]);
+   date.value=normalize(m[0]);
+   manualCount++;
    log("Manual OCR success");
  }
 }
 
 function next(){
+ if(!date.value) failCount++;
  excel.push([ref.value,date.value]);
  i++; load();
 }
@@ -167,18 +191,47 @@ function normalize(d){
 }
 
 function updateProgress(){
- document.getElementById("progress").textContent=
-  `PDF ${i+1}/${files.length} (${Math.round(i/files.length*100)}%)`;
+ progress.textContent=`PDF ${Math.min(i+1,files.length)}/${files.length} (${Math.round(i/files.length*100)||0}%)`;
+}
+
+function finish(){
+ status.textContent="✅ All PDFs processed successfully";
+ summary.style.display="block";
+ summary.innerHTML=`
+   <b>Summary</b><br>
+   Total PDFs: ${files.length}<br>
+   Auto OCR: ${autoCount}<br>
+   Manual OCR: ${manualCount}<br>
+   Failed: ${failCount}
+ `;
+ log("All processing finished");
+ alert("All PDFs processed successfully");
 }
 
 function zoomIn(){ scale+=0.3; load(); }
 function zoomOut(){ scale=Math.max(1,scale-0.3); load(); }
 
 function download(){
+ const ts=new Date().toISOString().slice(0,16).replace(/[:T]/g,"-");
  const ws=XLSX.utils.aoa_to_sheet(excel);
  const wb=XLSX.utils.book_new();
  XLSX.utils.book_append_sheet(wb,ws,"Invoices");
- XLSX.writeFile(wb,"Invoice_Data.xlsx");
+ XLSX.writeFile(wb,`Invoice_Data_${ts}.xlsx`);
+}
+
+function clearAll(){
+ files=[]; i=0;
+ excel=[["Internal Ref No","Invoice Date"]];
+ autoCount=manualCount=failCount=0;
+
+ filesInput=document.getElementById("files");
+ filesInput.value="";
+ ref.value=""; date.value="";
+ progress.textContent=""; status.textContent="";
+ summary.style.display="none";
+ log.textContent="";
+ ctx.clearRect(0,0,c.width,c.height);
+ box.style.width=box.style.height="0";
 }
 </script>
 
