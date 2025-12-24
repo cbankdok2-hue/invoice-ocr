@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Invoice OCR – Auto + Manual (Final)</title>
+<title>Invoice OCR – Auto Next + Block</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
@@ -11,227 +11,233 @@
 <style>
 body { font-family: Arial; margin: 10px; }
 .container { display: flex; gap: 10px; }
-
-#pdfWrap { position: relative; border: 1px solid #aaa; }
+#pdfWrap { position: relative; border: 1px solid #999; }
 canvas { display: block; }
-
-#box {
-  position: absolute;
-  border: 2px dashed red;
-  pointer-events: none;
-}
-
-.right { width: 340px; }
-input, button { width: 100%; margin-bottom: 6px; padding: 6px; }
-
-#progress { font-size: 13px; margin: 6px 0; }
-#status {
-  margin: 6px 0;
-  font-size: 14px;
-  font-weight: bold;
-  color: green;
-}
-#summary {
-  margin: 6px 0;
-  background: #eef6ee;
-  padding: 6px;
-  font-size: 13px;
-  display: none;
-}
-#log {
-  background: #f4f4f4;
-  height: 150px;
-  overflow: auto;
-  font-size: 12px;
-  padding: 6px;
-}
+#box { position:absolute; border:2px dashed red; pointer-events:none; }
+.right { width: 320px; }
+input, button { width:100%; margin-bottom:6px; padding:6px; }
+#progress { font-size:13px; }
+#status { font-weight:bold; }
+#log { background:#f4f4f4; height:160px; overflow:auto; font-size:12px; padding:6px; }
+.invalid { border:2px solid red; }
+button:disabled { background:#ccc; cursor:not-allowed; }
 </style>
 </head>
 
 <body>
 
-<h3>Invoice OCR – Auto + Manual (Final)</h3>
+<h3>Invoice OCR – Auto Next (Valid) | Block (Invalid)</h3>
 
 <input type="file" id="files" multiple accept="application/pdf">
 
 <div class="container">
-  <div id="pdfWrap">
-    <canvas id="canvas"></canvas>
-    <div id="box"></div>
-  </div>
+<div id="pdfWrap">
+  <canvas id="canvas"></canvas>
+  <div id="box"></div>
+</div>
 
-  <div class="right">
-    <div id="progress"></div>
-    <div id="status"></div>
+<div class="right">
+  <div id="progress"></div>
+  <div id="status"></div>
 
-    <div id="summary"></div>
+  <label>Internal Ref No</label>
+  <input id="ref" readonly>
 
-    <label>Internal Ref No</label>
-    <input id="ref" readonly>
+  <label>Invoice Date (DD-MM-YYYY)</label>
+  <input id="date">
 
-    <label>Invoice Date</label>
-    <input id="date">
+  <button onclick="manualOCR()">Manual OCR (Drag)</button>
+  <button id="nextBtn" onclick="nextPDF()" disabled>Next PDF</button>
+  <button onclick="download()">Download Excel</button>
+  <button onclick="clearAll()">Clear All</button>
 
-    <button onclick="manualOCR()">Manual OCR (Drag)</button>
-    <button onclick="next()">Next PDF</button>
-    <button onclick="download()">Download Excel</button>
-    <button onclick="clearAll()">Clear All</button>
-
-    <button onclick="zoomIn()">Zoom +</button>
-    <button onclick="zoomOut()">Zoom -</button>
-
-    <div id="log"></div>
-  </div>
+  <div id="log"></div>
+</div>
 </div>
 
 <script>
+// ================= SETUP =================
 pdfjsLib.GlobalWorkerOptions.workerSrc =
- "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+"https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
-const c = document.getElementById("canvas");
-const ctx = c.getContext("2d");
+const filesInput = document.getElementById("files");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
 const box = document.getElementById("box");
-const log = t => document.getElementById("log").textContent += t + "\n";
+const logDiv = document.getElementById("log");
+const progress = document.getElementById("progress");
+const status = document.getElementById("status");
+const ref = document.getElementById("ref");
+const dateInput = document.getElementById("date");
+const nextBtn = document.getElementById("nextBtn");
 
-let files=[], i=0, pdf, page, scale=2;
+const log = t => logDiv.textContent += t + "\n";
+
+// ================= STATE =================
+let files=[], index=0, pdf, page, scale=2;
 let sx,sy,ex,ey,drag=false;
 let excel=[["Internal Ref No","Invoice Date"]];
 
-let autoCount=0, manualCount=0, failCount=0;
-
-document.getElementById("files").onchange=e=>{
- files=[...e.target.files];
- i=0;
- excel=[["Internal Ref No","Invoice Date"]];
- autoCount=manualCount=failCount=0;
- document.getElementById("summary").style.display="none";
- document.getElementById("status").textContent="";
- load();
+// ================= FILE LOAD =================
+filesInput.onchange = ()=>{
+  files=[...filesInput.files];
+  index=0;
+  excel=[["Internal Ref No","Invoice Date"]];
+  logDiv.textContent="";
+  status.textContent="";
+  if(files.length) loadPDF();
 };
 
-async function load(){
- if(i>=files.length){ finish(); return; }
+// ================= LOAD PDF =================
+async function loadPDF(){
+  if(index>=files.length){ finish(); return; }
 
- ref.value=files[i].name.replace(/\.pdf$/i,"");
- date.value="";
- updateProgress();
+  ref.value = files[index].name.replace(/\.pdf$/i,"");
+  dateInput.value="";
+  dateInput.classList.remove("invalid");
+  nextBtn.disabled=true;
 
- pdf=await pdfjsLib.getDocument({data:await files[i].arrayBuffer()}).promise;
- page=await pdf.getPage(1);
+  updateProgress();
 
- const vp=page.getViewport({scale});
- c.width=vp.width; c.height=vp.height;
- await page.render({canvasContext:ctx,viewport:vp}).promise;
+  const data = await files[index].arrayBuffer();
+  pdf = await pdfjsLib.getDocument({data}).promise;
+  page = await pdf.getPage(1);
 
- autoOCR();
+  const vp = page.getViewport({scale});
+  canvas.width=vp.width;
+  canvas.height=vp.height;
+
+  await page.render({canvasContext:ctx, viewport:vp}).promise;
+  setTimeout(autoOCR,300);
 }
 
+// ================= AUTO OCR =================
 async function autoOCR(){
- log("Auto OCR running...");
- const r=await Tesseract.recognize(c,"eng");
- const m=r.data.text.match(/Invoice\s*Date[^0-9]*(\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{1,4})/i);
+  log("Auto OCR running...");
+  const r = await Tesseract.recognize(canvas,"eng");
+  const lines = r.data.text.split("\n");
 
- if(m){
-   date.value=normalize(m[1]);
-   autoCount++;
-   log("Auto OCR success");
-   setTimeout(next,500);
- }else{
-   log("Auto OCR failed → manual drag required");
- }
+  for(const line of lines){
+    if(/due/i.test(line)) continue;
+    if(/invoice\s*date/i.test(line)){
+      const m=line.match(/\d{1,3}[\/.\-]\d{1,3}[\/.\-]\d{4}/);
+      if(m){
+        const ok = applyDate(m[0],"Auto OCR");
+        if(ok){
+          setTimeout(nextPDF,500); // ✅ AUTO NEXT
+        }
+        return;
+      }
+    }
+  }
+  status.textContent="❌ Date not found – manual required";
+  log("Auto OCR failed");
 }
 
-c.onmousedown=e=>{
- const r=c.getBoundingClientRect();
- sx=e.clientX-r.left; sy=e.clientY-r.top; drag=true;
-};
-c.onmousemove=e=>{
- if(!drag) return;
- const r=c.getBoundingClientRect();
- ex=e.clientX-r.left; ey=e.clientY-r.top;
- box.style.left=Math.min(sx,ex)+"px";
- box.style.top=Math.min(sy,ey)+"px";
- box.style.width=Math.abs(ex-sx)+"px";
- box.style.height=Math.abs(ey-sy)+"px";
-};
-c.onmouseup=()=>drag=false;
+// ================= CENTRAL DATE CONTROL =================
+function applyDate(raw, source){
+  const d = normalize(raw);
+  if(d){
+    dateInput.value=d;
+    dateInput.classList.remove("invalid");
+    nextBtn.disabled=false;
+    status.textContent="✅ Valid date";
+    log(`${source}: valid date`);
+    return true;
+  } else {
+    dateInput.classList.add("invalid");
+    nextBtn.disabled=true;
+    status.textContent="❌ Invalid date – fix required";
+    log(`${source}: invalid date blocked`);
+    return false;
+  }
+}
 
+// ================= MANUAL DRAG =================
+canvas.onmousedown=e=>{
+  const r=canvas.getBoundingClientRect();
+  sx=e.clientX-r.left; sy=e.clientY-r.top; drag=true;
+};
+canvas.onmousemove=e=>{
+  if(!drag) return;
+  const r=canvas.getBoundingClientRect();
+  ex=e.clientX-r.left; ey=e.clientY-r.top;
+  box.style.left=Math.min(sx,ex)+"px";
+  box.style.top=Math.min(sy,ey)+"px";
+  box.style.width=Math.abs(ex-sx)+"px";
+  box.style.height=Math.abs(ey-sy)+"px";
+};
+canvas.onmouseup=()=>drag=false;
+
+// ================= MANUAL OCR =================
 async function manualOCR(){
- if(!sx||!ex) return alert("Please drag area first");
+  if(!sx||!ex) return alert("Drag date area first");
+  const w=Math.abs(ex-sx), h=Math.abs(ey-sy);
+  const crop=document.createElement("canvas");
+  crop.width=w; crop.height=h;
+  crop.getContext("2d").drawImage(canvas,
+    Math.min(sx,ex),Math.min(sy,ey),w,h,0,0,w,h);
 
- const w=Math.abs(ex-sx), h=Math.abs(ey-sy);
- const crop=document.createElement("canvas");
- crop.width=w; crop.height=h;
- crop.getContext("2d").drawImage(
-  c,Math.min(sx,ex),Math.min(sy,ey),w,h,0,0,w,h
- );
-
- const r=await Tesseract.recognize(
-  crop,"eng",{tessedit_char_whitelist:"0123456789./-"}
- );
-
- const m=r.data.text.match(/\d{1,4}[\/.\-]\d{1,2}[\/.\-]\d{1,4}/);
- if(m){
-   date.value=normalize(m[0]);
-   manualCount++;
-   log("Manual OCR success");
- }
+  const r=await Tesseract.recognize(crop,"eng",{tessedit_char_whitelist:"0123456789-./"});
+  const m=r.data.text.match(/\d{1,3}[\/.\-]\d{1,3}[\/.\-]\d{4}/);
+  if(m) applyDate(m[0],"Manual OCR");
+  else log("Manual OCR failed");
 }
 
-function next(){
- if(!date.value) failCount++;
- excel.push([ref.value,date.value]);
- i++; load();
+// ================= MANUAL TYPING =================
+dateInput.oninput = ()=>{
+  applyDate(dateInput.value,"Manual typing");
+};
+
+// ================= NEXT =================
+function nextPDF(){
+  if(nextBtn.disabled) return;
+  excel.push([ref.value,dateInput.value]);
+  index++;
+  loadPDF();
 }
 
-function normalize(d){
- const p=d.replace(/-/g,"/").split("/");
- if(p[0].length===4) return `${p[0]}-${p[1].padStart(2,"0")}-${p[2].padStart(2,"0")}`;
- return `${p[2]}-${p[1].padStart(2,"0")}-${p[0].padStart(2,"0")}`;
+// ================= STRICT DATE =================
+function isValidDateStrict(d){
+  if(!/^\d{2}-\d{2}-\d{4}$/.test(d)) return false;
+  const [dd,mm,yy]=d.split("-").map(Number);
+  if(mm<1||mm>12||dd<1||dd>31) return false;
+  const dim=[31,(yy%4===0&&(yy%100!==0||yy%400===0))?29:28,31,30,31,30,31,31,30,31,30,31];
+  return dd<=dim[mm-1];
+}
+function normalize(raw){
+  const p=raw.replace(/[.\-/]/g,"-").split("-");
+  if(p.length!==3) return "";
+  const d=`${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[2]}`;
+  return isValidDateStrict(d)?d:"";
 }
 
+// ================= HELPERS =================
 function updateProgress(){
- progress.textContent=`PDF ${Math.min(i+1,files.length)}/${files.length} (${Math.round(i/files.length*100)||0}%)`;
+  progress.textContent=`Processing ${index+1}/${files.length} | Remaining ${files.length-index-1}`;
 }
-
 function finish(){
- status.textContent="✅ All PDFs processed successfully";
- summary.style.display="block";
- summary.innerHTML=`
-   <b>Summary</b><br>
-   Total PDFs: ${files.length}<br>
-   Auto OCR: ${autoCount}<br>
-   Manual OCR: ${manualCount}<br>
-   Failed: ${failCount}
- `;
- log("All processing finished");
- alert("All PDFs processed successfully");
+  progress.textContent="100% Completed";
+  status.textContent="✅ All PDFs processed";
 }
-
-function zoomIn(){ scale+=0.3; load(); }
-function zoomOut(){ scale=Math.max(1,scale-0.3); load(); }
-
 function download(){
- const ts=new Date().toISOString().slice(0,16).replace(/[:T]/g,"-");
- const ws=XLSX.utils.aoa_to_sheet(excel);
- const wb=XLSX.utils.book_new();
- XLSX.utils.book_append_sheet(wb,ws,"Invoices");
- XLSX.writeFile(wb,`Invoice_Data_${ts}.xlsx`);
+  const ws=XLSX.utils.aoa_to_sheet(excel);
+  const wb=XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb,ws,"Invoices");
+  XLSX.writeFile(wb,"Invoice_Data.xlsx");
 }
-
 function clearAll(){
- files=[]; i=0;
- excel=[["Internal Ref No","Invoice Date"]];
- autoCount=manualCount=failCount=0;
-
- filesInput=document.getElementById("files");
- filesInput.value="";
- ref.value=""; date.value="";
- progress.textContent=""; status.textContent="";
- summary.style.display="none";
- log.textContent="";
- ctx.clearRect(0,0,c.width,c.height);
- box.style.width=box.style.height="0";
+  files=[]; index=0;
+  excel=[["Internal Ref No","Invoice Date"]];
+  filesInput.value="";
+  ref.value="";
+  dateInput.value="";
+  nextBtn.disabled=true;
+  progress.textContent="";
+  status.textContent="Cleared successfully";
+  logDiv.textContent="";
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  box.style.width=box.style.height="0";
 }
 </script>
 
