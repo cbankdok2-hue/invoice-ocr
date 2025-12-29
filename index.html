@@ -52,7 +52,7 @@ button:disabled { background:#ccc; cursor:not-allowed; }
     <label>Internal Ref No</label>
     <input id="ref" readonly>
 
-    <label>Invoice Date (DD-MM-YYYY)</label>
+    <label>Invoice / Debit Note / Order Date (DD-MM-YYYY)</label>
     <input id="date" placeholder="10-12-2024">
 
     <button id="nextBtn" onclick="nextPDF()" disabled>Next PDF</button>
@@ -76,7 +76,7 @@ const progress = document.getElementById("progress");
 const ref = document.getElementById("ref");
 
 let files=[], index=0;
-let excel=[["Internal Ref No","Invoice Date"]];
+let excel=[["Internal Ref No","Invoice / Debit Note / Order Date"]];
 let loggedSteps = new Set();
 
 // ================= PROCESS =================
@@ -95,10 +95,10 @@ function toggleProcess(){
 }
 
 // ================= FILE LOAD =================
-document.getElementById("files").onchange = ()=>{
-  files=[...event.target.files];
+document.getElementById("files").onchange = (e)=>{
+  files=[...e.target.files];
   index=0;
-  excel=[["Internal Ref No","Invoice Date"]];
+  excel=[["Internal Ref No","Invoice / Debit Note / Order Date"]];
   loadPDF();
 };
 
@@ -132,15 +132,19 @@ async function loadPDF(){
   autoOCR();
 }
 
-// ================= AUTO OCR =================
+// ================= AUTO OCR (Invoice + Debit Note + Order) =================
 async function autoOCR(){
   logStep("Auto OCR Started");
+
   const r = await Tesseract.recognize(canvas,"eng");
   const lines = r.data.text.split("\n");
 
   for(const l of lines){
-    if(/invoice\s*date/i.test(l)){
+
+    // 🔹 Detect Invoice Date OR Debit Note Date OR Order Date
+    if(/(invoice\s*date|debit\s*note\s*date|order\s*date)/i.test(l)){
       const m = l.match(/\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{4}/);
+
       if(m && applyDate(m[0],"Auto OCR")){
         logStep("Auto OCR Success");
         setTimeout(nextPDF,500);
@@ -148,10 +152,11 @@ async function autoOCR(){
       }
     }
   }
+
   logStep("Auto OCR Failed – Manual Needed");
 }
 
-// ================= DATE VALIDATION =================
+// ================= DATE INPUT =================
 dateInput.oninput = ()=>{
   applyDate(dateInput.value,"Manual Typing");
 };
@@ -163,6 +168,7 @@ dateInput.onkeydown = e =>{
   }
 };
 
+// ================= APPLY DATE =================
 function applyDate(raw, source){
   logStep(source);
   const d = normalize(raw);
