@@ -25,7 +25,6 @@ input, button, select {
 .valid { border:2px solid green; }
 
 button:disabled { background:#ccc; cursor:not-allowed; }
-
 #processWrap { display:none; }
 </style>
 </head>
@@ -53,7 +52,7 @@ button:disabled { background:#ccc; cursor:not-allowed; }
     <input id="ref" readonly>
 
     <label>Invoice / Debit Note / Order Date (DD-MM-YYYY)</label>
-    <input id="date" placeholder="10-12-2024">
+    <input id="date">
 
     <button id="nextBtn" onclick="nextPDF()" disabled>Next PDF</button>
     <button onclick="clearCurrent()">Clear</button>
@@ -75,30 +74,55 @@ const nextBtn = document.getElementById("nextBtn");
 const progress = document.getElementById("progress");
 const ref = document.getElementById("ref");
 
-let files=[], index=0;
-let excel=[["Internal Ref No","Invoice / Debit Note / Order Date"]];
+let files = [], index = 0;
+let excel = [["Internal Ref No","Date"]];
 let loggedSteps = new Set();
+
+// ================= STATE SAVE / RESTORE =================
+function saveState(){
+  localStorage.setItem("ocr_state", JSON.stringify({
+    index,
+    excel,
+    date: dateInput.value,
+    ref: ref.value
+  }));
+}
+
+function restoreState(){
+  const s = localStorage.getItem("ocr_state");
+  if(!s) return;
+
+  const state = JSON.parse(s);
+  index = state.index || 0;
+  excel = state.excel || excel;
+  dateInput.value = state.date || "";
+  ref.value = state.ref || "";
+
+  if(dateInput.value){
+    dateInput.className="valid";
+    nextBtn.disabled=false;
+  }
+}
 
 // ================= PROCESS =================
 function logStep(step){
   if(loggedSteps.has(step)) return;
   loggedSteps.add(step);
-  const opt = document.createElement("option");
-  opt.textContent = step;
+  const opt=document.createElement("option");
+  opt.textContent=step;
   processList.appendChild(opt);
 }
 
 // ================= TOGGLE =================
 function toggleProcess(){
   processWrap.style.display =
-    processWrap.style.display==="none" ? "block" : "none";
+    processWrap.style.display==="none"?"block":"none";
 }
 
 // ================= FILE LOAD =================
-document.getElementById("files").onchange = (e)=>{
+document.getElementById("files").onchange = e =>{
   files=[...e.target.files];
-  index=0;
-  excel=[["Internal Ref No","Invoice / Debit Note / Order Date"]];
+  restoreState();
   loadPDF();
 };
 
@@ -106,6 +130,7 @@ document.getElementById("files").onchange = (e)=>{
 async function loadPDF(){
   if(index>=files.length){
     progress.textContent="✅ All PDFs processed";
+    localStorage.removeItem("ocr_state");
     return;
   }
 
@@ -116,72 +141,58 @@ async function loadPDF(){
   dateInput.className="";
 
   ref.value = files[index].name.replace(/\.pdf$/i,"");
-  progress.textContent = `PDF ${index+1}/${files.length}`;
+  progress.textContent=`PDF ${index+1}/${files.length}`;
 
-  logStep("PDF Loaded");
+  saveState();
 
   const data = await files[index].arrayBuffer();
   const pdf = await pdfjsLib.getDocument({data}).promise;
   const page = await pdf.getPage(1);
   const vp = page.getViewport({scale:2});
 
-  canvas.width = vp.width;
-  canvas.height = vp.height;
-  await page.render({canvasContext:ctx, viewport:vp}).promise;
+  canvas.width=vp.width;
+  canvas.height=vp.height;
+  await page.render({canvasContext:ctx,viewport:vp}).promise;
 
   autoOCR();
 }
 
-// ================= AUTO OCR (Invoice + Debit Note + Order) =================
+// ================= AUTO OCR =================
 async function autoOCR(){
   logStep("Auto OCR Started");
 
-  const r = await Tesseract.recognize(canvas,"eng");
-  const lines = r.data.text.split("\n");
+  const r=await Tesseract.recognize(canvas,"eng");
+  const lines=r.data.text.split("\n");
 
   for(const l of lines){
-
-    // 🔹 Detect Invoice Date OR Debit Note Date OR Order Date
     if(/(invoice\s*date|debit\s*note\s*date|order\s*date)/i.test(l)){
-      const m = l.match(/\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{4}/);
-
+      const m=l.match(/\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{4}/);
       if(m && applyDate(m[0],"Auto OCR")){
-        logStep("Auto OCR Success");
         setTimeout(nextPDF,500);
         return;
       }
     }
   }
-
-  logStep("Auto OCR Failed – Manual Needed");
+  logStep("Manual Required");
 }
 
-// ================= DATE INPUT =================
+// ================= DATE =================
 dateInput.oninput = ()=>{
   applyDate(dateInput.value,"Manual Typing");
+  saveState();
 };
 
-// ENTER = NEXT
-dateInput.onkeydown = e =>{
-  if(e.key==="Enter" && !nextBtn.disabled){
-    nextPDF();
-  }
-};
-
-// ================= APPLY DATE =================
-function applyDate(raw, source){
-  logStep(source);
-  const d = normalize(raw);
+function applyDate(raw,src){
+  const d=normalize(raw);
   if(d){
     dateInput.value=d;
     dateInput.className="valid";
     nextBtn.disabled=false;
-    logStep("Date Valid");
+    saveState();
     return true;
   }else{
     dateInput.className="invalid";
     nextBtn.disabled=true;
-    logStep("Date Invalid – Blocked");
     return false;
   }
 }
@@ -189,9 +200,9 @@ function applyDate(raw, source){
 // ================= NEXT =================
 function nextPDF(){
   if(nextBtn.disabled) return;
-  excel.push([ref.value, dateInput.value]);
-  logStep("Saved to Excel");
+  excel.push([ref.value,dateInput.value]);
   index++;
+  saveState();
   loadPDF();
 }
 
@@ -200,26 +211,23 @@ function clearCurrent(){
   dateInput.value="";
   dateInput.className="";
   nextBtn.disabled=true;
-  processList.innerHTML="";
   loggedSteps.clear();
   ctx.clearRect(0,0,canvas.width,canvas.height);
-  logStep("Cleared Current PDF");
+  saveState();
 }
 
 // ================= DATE RULE =================
 function normalize(raw){
-  const p = raw.replace(/[.\-/]/g,"-").split("-");
+  const p=raw.replace(/[.\-/]/g,"-").split("-");
   if(p.length!==3) return "";
-  const d = `${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[2]}`;
+  const d=`${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[2]}`;
   return isValid(d)?d:"";
 }
-
 function isValid(d){
   if(!/^\d{2}-\d{2}-\d{4}$/.test(d)) return false;
   const [dd,mm,yy]=d.split("-").map(Number);
-  if(mm<1||mm>12||dd<1||dd>31) return false;
   const dim=[31,(yy%4===0&&(yy%100!==0||yy%400===0))?29:28,31,30,31,30,31,31,30,31,30,31];
-  return dd<=dim[mm-1];
+  return mm>=1&&mm<=12&&dd>=1&&dd<=dim[mm-1];
 }
 
 // ================= DOWNLOAD =================
