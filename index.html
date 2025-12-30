@@ -2,7 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Invoice OCR – Final Professional</title>
+<title>Invoice OCR – Stable Final</title>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4.1.1/dist/tesseract.min.js"></script>
@@ -13,7 +13,7 @@ body { font-family: Arial; margin:10px; }
 .container { display:flex; gap:10px; }
 #pdfWrap { border:1px solid #999; }
 canvas { display:block; }
-.right { width:340px; }
+.right { width:360px; }
 
 input, button, select {
   width:100%;
@@ -31,7 +31,7 @@ button:disabled { background:#ccc; cursor:not-allowed; }
 
 <body>
 
-<h3>Invoice OCR – Auto + Manual + Validation</h3>
+<h3>Invoice OCR – Auto + Manual + Restore Safe</h3>
 
 <input type="file" id="files" multiple accept="application/pdf">
 
@@ -52,16 +52,16 @@ button:disabled { background:#ccc; cursor:not-allowed; }
     <input id="ref" readonly>
 
     <label>Invoice / Debit Note / Order Date (DD-MM-YYYY)</label>
-    <input id="date">
+    <input id="date" placeholder="DD-MM-YYYY">
 
-    <button id="nextBtn" onclick="nextPDF()" disabled>Next PDF</button>
-    <button onclick="clearCurrent()">Clear</button>
+    <button id="nextBtn" disabled>Next PDF (Enter)</button>
+    <button onclick="restoreState()">Restore Last</button>
+    <button onclick="clearCurrent()">Clear Current</button>
     <button onclick="download()">Download Excel</button>
   </div>
 </div>
 
 <script>
-// ================= SETUP =================
 pdfjsLib.GlobalWorkerOptions.workerSrc =
 "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
 
@@ -74,62 +74,58 @@ const nextBtn = document.getElementById("nextBtn");
 const progress = document.getElementById("progress");
 const ref = document.getElementById("ref");
 
-let files = [], index = 0;
-let excel = [["Internal Ref No","Date"]];
-let loggedSteps = new Set();
+let files=[], index=0;
+let excel=[["Internal Ref No","Date"]];
+let loggedSteps=new Set();
 
-// ================= STATE SAVE / RESTORE =================
+/* ---------------- STATE ---------------- */
 function saveState(){
-  localStorage.setItem("ocr_state", JSON.stringify({
-    index,
-    excel,
-    date: dateInput.value,
-    ref: ref.value
+  localStorage.setItem("ocr_state",JSON.stringify({
+    index, excel,
+    date:dateInput.value,
+    ref:ref.value
   }));
 }
 
 function restoreState(){
-  const s = localStorage.getItem("ocr_state");
-  if(!s) return;
+  const s=localStorage.getItem("ocr_state");
+  if(!s) return alert("No saved state found");
 
-  const state = JSON.parse(s);
-  index = state.index || 0;
-  excel = state.excel || excel;
-  dateInput.value = state.date || "";
-  ref.value = state.ref || "";
+  const st=JSON.parse(s);
+  index=st.index||0;
+  excel=st.excel||excel;
+  dateInput.value=st.date||"";
+  ref.value=st.ref||"";
 
-  if(dateInput.value){
-    dateInput.className="valid";
-    nextBtn.disabled=false;
-  }
+  if(files.length) loadPDF();
 }
 
-// ================= PROCESS =================
-function logStep(step){
-  if(loggedSteps.has(step)) return;
-  loggedSteps.add(step);
-  const opt=document.createElement("option");
-  opt.textContent=step;
-  processList.appendChild(opt);
+/* ---------------- PROCESS LOG ---------------- */
+function logStep(t){
+  if(loggedSteps.has(t)) return;
+  loggedSteps.add(t);
+  const o=document.createElement("option");
+  o.textContent=t;
+  processList.appendChild(o);
 }
 
-// ================= TOGGLE =================
 function toggleProcess(){
-  processWrap.style.display =
+  processWrap.style.display=
     processWrap.style.display==="none"?"block":"none";
 }
 
-// ================= FILE LOAD =================
-document.getElementById("files").onchange = e =>{
+/* ---------------- FILE LOAD ---------------- */
+document.getElementById("files").onchange=e=>{
   files=[...e.target.files];
-  restoreState();
+  index=0;
+  excel=[["Internal Ref No","Date"]];
   loadPDF();
 };
 
-// ================= LOAD PDF =================
+/* ---------------- LOAD PDF ---------------- */
 async function loadPDF(){
   if(index>=files.length){
-    progress.textContent="✅ All PDFs processed";
+    progress.textContent="✅ All PDFs completed";
     localStorage.removeItem("ocr_state");
     return;
   }
@@ -140,15 +136,15 @@ async function loadPDF(){
   dateInput.value="";
   dateInput.className="";
 
-  ref.value = files[index].name.replace(/\.pdf$/i,"");
-  progress.textContent=`PDF ${index+1}/${files.length}`;
+  ref.value=files[index].name.replace(/\.pdf$/i,"");
+  progress.textContent=`PDF ${index+1} / ${files.length}`;
 
   saveState();
 
-  const data = await files[index].arrayBuffer();
-  const pdf = await pdfjsLib.getDocument({data}).promise;
-  const page = await pdf.getPage(1);
-  const vp = page.getViewport({scale:2});
+  const buf=await files[index].arrayBuffer();
+  const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+  const page=await pdf.getPage(1);
+  const vp=page.getViewport({scale:2});
 
   canvas.width=vp.width;
   canvas.height=vp.height;
@@ -157,30 +153,28 @@ async function loadPDF(){
   autoOCR();
 }
 
-// ================= AUTO OCR =================
+/* ---------------- OCR ---------------- */
 async function autoOCR(){
-  logStep("Auto OCR Started");
-
+  logStep("Auto OCR started");
   const r=await Tesseract.recognize(canvas,"eng");
-  const lines=r.data.text.split("\n");
-
-  for(const l of lines){
-    if(/(invoice\s*date|debit\s*note\s*date|order\s*date)/i.test(l)){
+  for(const l of r.data.text.split("\n")){
+    if(/date/i.test(l)){
       const m=l.match(/\d{1,2}[.\-\/]\d{1,2}[.\-\/]\d{4}/);
-      if(m && applyDate(m[0],"Auto OCR")){
-        setTimeout(nextPDF,500);
+      if(m && applyDate(m[0],"OCR")){
+        setTimeout(nextPDF,400);
         return;
       }
     }
   }
-  logStep("Manual Required");
+  logStep("Manual input required");
 }
 
-// ================= DATE =================
-dateInput.oninput = ()=>{
-  applyDate(dateInput.value,"Manual Typing");
-  saveState();
-};
+/* ---------------- DATE ---------------- */
+dateInput.oninput=()=>applyDate(dateInput.value,"Manual");
+
+dateInput.addEventListener("keydown",e=>{
+  if(e.key==="Enter") nextPDF();
+});
 
 function applyDate(raw,src){
   const d=normalize(raw);
@@ -188,16 +182,17 @@ function applyDate(raw,src){
     dateInput.value=d;
     dateInput.className="valid";
     nextBtn.disabled=false;
+    logStep(src+" date accepted");
     saveState();
     return true;
-  }else{
-    dateInput.className="invalid";
-    nextBtn.disabled=true;
-    return false;
   }
+  dateInput.className="invalid";
+  nextBtn.disabled=true;
+  return false;
 }
 
-// ================= NEXT =================
+/* ---------------- NEXT ---------------- */
+nextBtn.onclick=nextPDF;
 function nextPDF(){
   if(nextBtn.disabled) return;
   excel.push([ref.value,dateInput.value]);
@@ -206,19 +201,20 @@ function nextPDF(){
   loadPDF();
 }
 
-// ================= CLEAR =================
+/* ---------------- CLEAR ---------------- */
 function clearCurrent(){
   dateInput.value="";
   dateInput.className="";
   nextBtn.disabled=true;
   loggedSteps.clear();
+  processList.innerHTML="";
   ctx.clearRect(0,0,canvas.width,canvas.height);
   saveState();
 }
 
-// ================= DATE RULE =================
-function normalize(raw){
-  const p=raw.replace(/[.\-/]/g,"-").split("-");
+/* ---------------- DATE RULE ---------------- */
+function normalize(r){
+  const p=r.replace(/[.\-/]/g,"-").split("-");
   if(p.length!==3) return "";
   const d=`${p[0].padStart(2,"0")}-${p[1].padStart(2,"0")}-${p[2]}`;
   return isValid(d)?d:"";
@@ -230,7 +226,7 @@ function isValid(d){
   return mm>=1&&mm<=12&&dd>=1&&dd<=dim[mm-1];
 }
 
-// ================= DOWNLOAD =================
+/* ---------------- DOWNLOAD ---------------- */
 function download(){
   const ws=XLSX.utils.aoa_to_sheet(excel);
   const wb=XLSX.utils.book_new();
